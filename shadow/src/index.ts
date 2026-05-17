@@ -15,6 +15,7 @@ import "./tools/diff.js";
 import "./tools/promote.js";
 import "./tools/explain-promotion.js";
 import "./tools/shadow-console.js";
+import "./tools/apply-corrections.js";
 
 export default worker;
 

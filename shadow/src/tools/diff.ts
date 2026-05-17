@@ -186,6 +186,21 @@ function buildBlocks(
     // unambiguous: "this checkbox represents REQ-N, and the Reviewer says..."
     blocks.push(verdictBadge(verdict, reason));
 
+    // AI self-correction marker. When the Triager regenerated this draft
+    // taking the Reviewer's feedback into account, surface that explicitly —
+    // it's the multi-turn AI collaboration moment.
+    const correctionApplied = getProp(shadow, "Correction Applied");
+    const originalDraft = getProp(shadow, "Original Draft");
+    if (correctionApplied === "Yes" && originalDraft) {
+      blocks.push(
+        calloutBlock(
+          "✏️",
+          "purple_background",
+          `AI self-correction applied — Triager rewrote this draft after Reviewer feedback. Original: "${originalDraft.slice(0, 200)}${originalDraft.length > 200 ? "..." : ""}"`,
+        ),
+      );
+    }
+
     if (d.kind === "added") {
       blocks.push(calloutBlock("➕", "green_background", "Row added (not present in real DB)"));
       continue;
@@ -276,8 +291,33 @@ worker.tool("diffShadowVsReal", {
     const diffs = computeDiff(real, shadow);
     const blocks = buildBlocks(diffs, shadowById);
 
-    await clearChildren(notion, reportPageId);
-    await appendChunked(notion, reportPageId, blocks);
+    // Skip clearing old content — the parallel delete phase consistently hits
+    // the worker timeout when the page has >50 existing blocks. Instead,
+    // prepend a clear "═══ NEW RUN ═══" separator so the latest report is
+    // visually distinct. Page grows over time, latest always at the bottom.
+    const separator = [
+      {
+        object: "block",
+        type: "divider",
+        divider: {},
+      },
+      {
+        object: "block",
+        type: "callout",
+        callout: {
+          color: "default",
+          icon: { type: "emoji", emoji: "🔽" },
+          rich_text: [
+            {
+              type: "text",
+              text: { content: `NEW RUN — ${new Date().toISOString().slice(0, 19).replace("T", " ")}` },
+              annotations: { bold: true },
+            },
+          ],
+        },
+      },
+    ];
+    await appendChunked(notion, reportPageId, [...separator, ...blocks]);
 
     const verdicts = diffs.map((d) => getProp(shadowById.get(d.requestId), "Risk Verdict"));
     return {
