@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { redactPII, restorePII, type RedactionResult } from "./privacy.js";
 
 // Inlined prompt — keeps the bundle self-contained so the worker doesn't need
 // to readFileSync from disk at runtime in the sandboxed deploy environment.
@@ -86,9 +87,24 @@ function getClient(): Anthropic {
   return client;
 }
 
+export type TriageWithRedaction = {
+  triage: TriageResult;
+  redaction: RedactionResult;
+};
+
 export async function triageOneRow(inbound: string): Promise<TriageResult> {
+  const { triage } = await triageOneRowWithRedaction(inbound);
+  return triage;
+}
+
+// Privacy-aware triage. The Triager never sees raw PII — only token
+// placeholders like [EMAIL_1], [PHONE_1], [URL_1]. The final draft is
+// returned with PII restored, so the customer-facing reply looks natural.
+// The redaction map is also returned so callers can audit what was hidden.
+export async function triageOneRowWithRedaction(inbound: string): Promise<TriageWithRedaction> {
+  const redaction = redactPII(inbound);
   const c = getClient();
-  const userMessage = `Inbound message:\n${inbound}`;
+  const userMessage = `Inbound message:\n${redaction.redacted}`;
 
   let response = await c.messages.create({
     model: "claude-sonnet-4-6",
@@ -96,10 +112,11 @@ export async function triageOneRow(inbound: string): Promise<TriageResult> {
     system: SYSTEM_PROMPT,
     messages: [{ role: "user", content: userMessage }],
   });
-
   let text = (response.content[0] as any)?.text ?? "";
+
+  let parsed: TriageResult;
   try {
-    return validate(extractJson(text));
+    parsed = validate(extractJson(text));
   } catch (_e) {
     response = await c.messages.create({
       model: "claude-sonnet-4-6",
@@ -110,6 +127,15 @@ export async function triageOneRow(inbound: string): Promise<TriageResult> {
       messages: [{ role: "user", content: userMessage }],
     });
     text = (response.content[0] as any)?.text ?? "";
-    return validate(extractJson(text));
+    parsed = validate(extractJson(text));
   }
+
+  // Restore PII in the draft so the final customer-facing reply looks natural.
+  return {
+    triage: {
+      ...parsed,
+      draft: restorePII(parsed.draft, redaction.map),
+    },
+    redaction,
+  };
 }

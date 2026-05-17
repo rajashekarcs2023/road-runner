@@ -2,8 +2,9 @@ import { j } from "@notionhq/workers/schema-builder";
 import { worker } from "../worker.js";
 import { notionPacer } from "../lib/notion-pacer.js";
 import { getProp, fetchAllRows } from "../lib/notion-utils.js";
-import { triageOneRow, type TriageResult } from "../lib/anthropic.js";
+import { triageOneRowWithRedaction, type TriageResult } from "../lib/anthropic.js";
 import { reviewOneChange, type ReviewResult } from "../lib/reviewer.js";
+import { summarizeRedactions } from "../lib/privacy.js";
 
 // Multi-agent triage with built-in supervision.
 //
@@ -44,15 +45,24 @@ worker.tool("triageShadow", {
       inbound: string;
       triage: TriageResult;
       review: ReviewResult;
+      redactionSummary: string;
     };
 
-    // Phase 1: parallel Triager calls (~3s for 18 rows).
+    // Phase 1: privacy-aware parallel Triager calls. The Triager sees PII
+    // token placeholders, never raw customer data. Restored in the final
+    // draft. ~3s for 18 rows.
     const triageResults = await Promise.all(
       rows.map(async (row: any) => {
         const inbound = getProp(row, "Inbound Text");
         try {
-          const triage = await triageOneRow(inbound);
-          return { row, inbound, triage, ok: true as const };
+          const { triage, redaction } = await triageOneRowWithRedaction(inbound);
+          return {
+            row,
+            inbound,
+            triage,
+            redactionSummary: summarizeRedactions(redaction.counts),
+            ok: true as const,
+          };
         } catch (e: any) {
           return { row, inbound, ok: false as const, error: String(e?.message ?? e) };
         }
@@ -71,7 +81,13 @@ worker.tool("triageShadow", {
         }
         try {
           const review = await reviewOneChange(t.inbound, t.triage);
-          inferences.push({ row: t.row, inbound: t.inbound, triage: t.triage, review });
+          inferences.push({
+            row: t.row,
+            inbound: t.inbound,
+            triage: t.triage,
+            review,
+            redactionSummary: t.redactionSummary,
+          });
         } catch (e: any) {
           errors.push(`reviewer: ${e?.message ?? e}`);
         }
@@ -100,6 +116,9 @@ worker.tool("triageShadow", {
             "Risk Verdict": { select: { name: VERDICT_LABEL[inf.review.verdict] } },
             "Risk Reason": {
               rich_text: [{ text: { content: inf.review.reason } }],
+            },
+            "PII Redacted": {
+              rich_text: [{ text: { content: inf.redactionSummary } }],
             },
           },
         });

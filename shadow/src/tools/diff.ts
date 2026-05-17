@@ -186,6 +186,18 @@ function buildBlocks(
     // unambiguous: "this checkbox represents REQ-N, and the Reviewer says..."
     blocks.push(verdictBadge(verdict, reason));
 
+    // Privacy badge — shows what PII the redaction layer hid from the LLM.
+    const piiSummary = getProp(shadow, "PII Redacted");
+    if (piiSummary && piiSummary !== "none") {
+      blocks.push(
+        calloutBlock(
+          "🔒",
+          "default",
+          `PII redacted before any LLM call: ${piiSummary}. The Triager and Reviewer never saw raw customer data — only token placeholders.`,
+        ),
+      );
+    }
+
     // AI self-correction marker. When the Triager regenerated this draft
     // taking the Reviewer's feedback into account, surface that explicitly —
     // it's the multi-turn AI collaboration moment.
