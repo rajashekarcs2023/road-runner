@@ -14,5 +14,7 @@ import "./tools/triage.js";
 import "./tools/diff.js";
 import "./tools/promote.js";
 import "./tools/explain-promotion.js";
+import "./tools/shadow-console.js";
 
 export default worker;
+

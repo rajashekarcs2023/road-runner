@@ -146,16 +146,33 @@ function buildBlocks(
     heading_2: { rich_text: [{ type: "text", text: { content: "Modified rows" } }] },
   });
 
-  for (const d of diffs) {
+  for (let i = 0; i < diffs.length; i++) {
+    const d = diffs[i];
     const shadow = shadowById.get(d.requestId);
     const verdict = getProp(shadow, "Risk Verdict") || "Review";
     const reason = getProp(shadow, "Risk Reason");
 
-    // Reviewer's verdict badge — sets the tone for the row.
-    blocks.push(verdictBadge(verdict, reason));
+    // Divider before each row to separate from the previous row's deltas.
+    if (i > 0) {
+      blocks.push({ object: "block", type: "divider", divider: {} });
+    }
 
-    // The to_do block — the promote tool reads this. Default-checked driven
-    // by the Reviewer's verdict.
+    // Heading: makes each row scannable and shows position N of M.
+    blocks.push({
+      object: "block",
+      type: "heading_3",
+      heading_3: {
+        rich_text: [
+          {
+            type: "text",
+            text: { content: `${d.requestId}   (${i + 1} of ${diffs.length})` },
+          },
+        ],
+      },
+    });
+
+    // The to_do block — the promote tool reads this. Default-checked is
+    // driven by the Reviewer's verdict (Risky = unchecked).
     blocks.push({
       object: "block",
       type: "to_do",
@@ -164,6 +181,10 @@ function buildBlocks(
         rich_text: [{ type: "text", text: { content: `Request ID: ${d.requestId}` } }],
       },
     });
+
+    // Reviewer's verdict — placed AFTER the to_do so the visual association is
+    // unambiguous: "this checkbox represents REQ-N, and the Reviewer says..."
+    blocks.push(verdictBadge(verdict, reason));
 
     if (d.kind === "added") {
       blocks.push(calloutBlock("➕", "green_background", "Row added (not present in real DB)"));
@@ -198,13 +219,16 @@ function buildBlocks(
 
 async function clearChildren(notion: any, pageId: string) {
   const existing = await fetchAllBlockChildren(notion, pageId);
-  for (const block of existing) {
-    await notionPacer.wait();
-    try {
-      await notion.blocks.delete({ block_id: block.id });
-    } catch (_e) {
-      // continue
-    }
+  // Parallel-batch deletes. Notion tolerates concurrent delete requests; the
+  // pacer-throttled serial version overflows the worker timeout at >50 blocks.
+  const BATCH = 8;
+  for (let i = 0; i < existing.length; i += BATCH) {
+    const slice = existing.slice(i, i + BATCH);
+    await Promise.all(
+      slice.map((b: any) =>
+        notion.blocks.delete({ block_id: b.id }).catch(() => undefined),
+      ),
+    );
   }
 }
 
