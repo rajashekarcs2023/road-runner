@@ -13,5 +13,6 @@ import "./tools/shadow-this-db.js";
 import "./tools/triage.js";
 import "./tools/diff.js";
 import "./tools/promote.js";
+import "./tools/explain-promotion.js";
 
 export default worker;

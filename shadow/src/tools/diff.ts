@@ -37,27 +37,96 @@ function calloutBlock(emoji: string, color: string, content: string) {
   };
 }
 
-// GitHub-PR aesthetic: header + per-row to_do (default checked) + red/green
-// callouts for before/after. The Severity Score field gets a "NEW PROPERTY"
-// callout the first time it appears for a row (i.e., before was empty), to
-// highlight the schema-level change in the demo.
-function buildBlocks(diffs: RowDiff[]) {
+// Verdict-driven defaults. Safe = auto-promote (checked). Review = checked
+// but flagged. Risky = forced opt-in (unchecked).
+function defaultCheckedFor(verdict: string): boolean {
+  if (verdict === "Risky") return false;
+  return true;
+}
+
+function verdictBadge(verdict: string, reason: string) {
+  if (verdict === "Risky") {
+    return calloutBlock("🔴", "red_background", `RISKY — ${reason || "Reviewer flagged this change."}`);
+  }
+  if (verdict === "Review") {
+    return calloutBlock("🟡", "yellow_background", `REVIEW — ${reason || "Reviewer asks for a human glance."}`);
+  }
+  return calloutBlock("🟢", "green_background", `SAFE — ${reason || "Reviewer agrees with Triager."}`);
+}
+
+// PREVIEW MODE banner. Locks the category in the page itself, not just the
+// voiceover. Anyone opening the Diff Report sees "this is not live" first.
+function previewModeBanner(modified: number, riskyCount: number) {
+  const subtitle =
+    riskyCount > 0
+      ? `${modified} rows pending your review. ${riskyCount} flagged by the Reviewer agent as RISKY — unchecked by default. Check the boxes you want promoted to production.`
+      : `${modified} rows pending your review. Check the boxes you want promoted to production.`;
+
+  return [
+    {
+      object: "block",
+      type: "callout",
+      callout: {
+        color: "blue_background",
+        icon: { type: "emoji", emoji: "🔒" },
+        rich_text: [
+          {
+            type: "text",
+            text: { content: "PREVIEW MODE — these changes are NOT live yet." },
+            annotations: { bold: true },
+          },
+        ],
+      },
+    },
+    {
+      object: "block",
+      type: "paragraph",
+      paragraph: {
+        rich_text: [{ type: "text", text: { content: subtitle } }],
+      },
+    },
+  ];
+}
+
+function buildBlocks(
+  diffs: RowDiff[],
+  shadowById: Map<string, any>,
+): any[] {
+  const modified = diffs.filter((d) => d.kind === "modified").length;
+  const added = diffs.filter((d) => d.kind === "added").length;
+  const deleted = diffs.filter((d) => d.kind === "deleted").length;
+
+  const verdicts = diffs.map((d) => getProp(shadowById.get(d.requestId), "Risk Verdict"));
+  const riskyCount = verdicts.filter((v) => v === "Risky").length;
+  const reviewCount = verdicts.filter((v) => v === "Review").length;
+  const safeCount = verdicts.filter((v) => v === "Safe").length;
+
   const blocks: any[] = [];
 
+  // Banner.
+  blocks.push(...previewModeBanner(diffs.length, riskyCount));
+
+  // Title.
   blocks.push({
     object: "block",
     type: "heading_1",
     heading_1: {
       rich_text: [
-        { type: "text", text: { content: `Diff Report — ${new Date().toISOString()}` } },
+        { type: "text", text: { content: `Diff Report — ${new Date().toISOString().slice(0, 19).replace("T", " ")}` } },
       ],
     },
   });
 
-  const modified = diffs.filter((d) => d.kind === "modified").length;
-  const added = diffs.filter((d) => d.kind === "added").length;
-  const deleted = diffs.filter((d) => d.kind === "deleted").length;
+  // Risk summary line.
+  blocks.push(
+    calloutBlock(
+      "🤖",
+      "gray_background",
+      `Reviewer Agent (Claude #2) audited ${diffs.length} changes from the Triager (Claude #1): 🟢 ${safeCount} Safe   🟡 ${reviewCount} Review   🔴 ${riskyCount} Risky`,
+    ),
+  );
 
+  // Files-changed line.
   blocks.push(
     calloutBlock(
       "📝",
@@ -67,9 +136,7 @@ function buildBlocks(diffs: RowDiff[]) {
   );
 
   if (diffs.length === 0) {
-    blocks.push(
-      calloutBlock("✅", "green_background", "No changes detected. Shadow matches real."),
-    );
+    blocks.push(calloutBlock("✅", "green_background", "No changes detected. Shadow matches real."));
     return blocks;
   }
 
@@ -80,14 +147,20 @@ function buildBlocks(diffs: RowDiff[]) {
   });
 
   for (const d of diffs) {
-    // to_do block is the promote tool's contract. Default checked so the
-    // demoer unchecks the rows they want to reject (more cinematic than
-    // checking 15 of 18).
+    const shadow = shadowById.get(d.requestId);
+    const verdict = getProp(shadow, "Risk Verdict") || "Review";
+    const reason = getProp(shadow, "Risk Reason");
+
+    // Reviewer's verdict badge — sets the tone for the row.
+    blocks.push(verdictBadge(verdict, reason));
+
+    // The to_do block — the promote tool reads this. Default-checked driven
+    // by the Reviewer's verdict.
     blocks.push({
       object: "block",
       type: "to_do",
       to_do: {
-        checked: true,
+        checked: defaultCheckedFor(verdict),
         rich_text: [{ type: "text", text: { content: `Request ID: ${d.requestId}` } }],
       },
     });
@@ -103,7 +176,6 @@ function buildBlocks(diffs: RowDiff[]) {
 
     for (const delta of d.fieldDeltas) {
       const beforeEmpty = !delta.before;
-      // Severity Score: emit a NEW PROPERTY badge the first time it appears.
       if (delta.field === "Severity Score" && beforeEmpty) {
         blocks.push(
           calloutBlock(
@@ -115,15 +187,9 @@ function buildBlocks(diffs: RowDiff[]) {
         continue;
       }
       blocks.push(
-        calloutBlock(
-          "➖",
-          "red_background",
-          `${delta.field}: ${delta.before || "(empty)"}`,
-        ),
+        calloutBlock("➖", "red_background", `${delta.field}: ${delta.before || "(empty)"}`),
       );
-      blocks.push(
-        calloutBlock("➕", "green_background", `${delta.field}: ${delta.after}`),
-      );
+      blocks.push(calloutBlock("➕", "green_background", `${delta.field}: ${delta.after}`));
     }
   }
 
@@ -137,13 +203,12 @@ async function clearChildren(notion: any, pageId: string) {
     try {
       await notion.blocks.delete({ block_id: block.id });
     } catch (_e) {
-      // Already deleted or not deletable. Skip.
+      // continue
     }
   }
 }
 
 async function appendChunked(notion: any, pageId: string, blocks: any[]) {
-  // Notion caps appends at 100 blocks per request.
   for (let i = 0; i < blocks.length; i += 100) {
     await notionPacer.wait();
     await notion.blocks.children.append({
@@ -156,7 +221,7 @@ async function appendChunked(notion: any, pageId: string, blocks: any[]) {
 worker.tool("diffShadowVsReal", {
   title: "Diff Shadow vs Real",
   description:
-    "Compare the shadow customer-requests DB against the real one. Writes a Diff Report page showing every modified row, with red/green callouts for before/after values and to_do checkboxes per row. Use this when the user says 'show me the diff' or 'compare shadow and real'.",
+    "Compare the shadow customer-requests DB against the real one. Writes a Diff Report page with a PREVIEW MODE banner, a Reviewer Agent summary (Safe/Review/Risky counts), and per-row blocks showing the Reviewer's verdict, red/green before/after callouts, and a default-checked to_do (default-UNCHECKED for Risky rows). Use this when the user says 'show me the diff' or 'compare shadow and real'.",
   schema: j.object({}),
   execute: async (_input, { notion }) => {
     const realDbId = process.env.REQUESTS_DB_ID;
@@ -176,12 +241,21 @@ worker.tool("diffShadowVsReal", {
     const real = realPages.map(rowFromPage).filter((r) => r.requestId);
     const shadow = shadowPages.map(rowFromPage).filter((r) => r.requestId);
 
+    // Build shadow lookup by Request ID so the renderer can pull Risk Verdict /
+    // Risk Reason per row.
+    const shadowById = new Map<string, any>();
+    for (const p of shadowPages) {
+      const id = getProp(p, "Request ID");
+      if (id) shadowById.set(id, p);
+    }
+
     const diffs = computeDiff(real, shadow);
-    const blocks = buildBlocks(diffs);
+    const blocks = buildBlocks(diffs, shadowById);
 
     await clearChildren(notion, reportPageId);
     await appendChunked(notion, reportPageId, blocks);
 
+    const verdicts = diffs.map((d) => getProp(shadowById.get(d.requestId), "Risk Verdict"));
     return {
       reportPageId,
       summary: {
@@ -189,6 +263,9 @@ worker.tool("diffShadowVsReal", {
         modified: diffs.filter((d) => d.kind === "modified").length,
         added: diffs.filter((d) => d.kind === "added").length,
         deleted: diffs.filter((d) => d.kind === "deleted").length,
+        safe: verdicts.filter((v) => v === "Safe").length,
+        review: verdicts.filter((v) => v === "Review").length,
+        risky: verdicts.filter((v) => v === "Risky").length,
       },
     };
   },
