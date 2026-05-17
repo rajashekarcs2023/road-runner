@@ -1,0 +1,36 @@
+{
+  "name": "shadow",
+  "version": "0.1.0",
+  "description": "Preview Mode for Notion AI. Shadow any DB, let agents act on the copy, diff-and-promote what works.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "doctor": "tsx scripts/doctor.ts",
+    "setup-db": "tsx scripts/setup-db.ts",
+    "setup-shadow-db": "tsx scripts/setup-shadow-db.ts",
+    "setup-pages": "tsx scripts/setup-pages.ts",
+    "seed": "tsx scripts/seed.ts",
+    "reset": "tsx scripts/reset.ts",
+    "deploy": "ntn workers deploy --name shadow"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.65.0",
+    "@notionhq/client": "^2.2.15",
+    "@notionhq/workers": "^0.1.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}
